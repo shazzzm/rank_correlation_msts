@@ -1,0 +1,9 @@
+Code and data for my paper "Construction of Minimum Spanning Trees from Financial Returns using Rank Based Correlation"
+
+Available from ariXv at:
+
+To run:
+1. Set up a virtualenv
+2. pip install -r requirements.txt
+3. To get the figures for the paper run mst_analysis.py
+4. To get the results for the bootstrap (Section 3.5) run mst_bootstrap.py (note as this is random you will get different figures to those in the paper)
