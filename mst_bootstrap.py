@@ -7,6 +7,15 @@ import matplotlib.pyplot as plt
 from arch.bootstrap import CircularBlockBootstrap
 from scipy.stats import spearmanr, kendalltau
 
+def find_edge_p_values(edges, p_values_pearson, p_values_spearman, p_values_tau):
+    for edge in edges:
+        ind1 = company_names == edge[0]
+        ind2 = company_names == edge[1]
+        print(edge)
+        print(p_values_pearson[ind1, ind2])
+        print(p_values_spearman[ind1, ind2])
+        print(p_values_tau[ind1, ind2])
+
 def correlation_to_distance_graph(G):
     """
     Converts a correlation graph to a distance based one
@@ -91,14 +100,13 @@ df_2 = df_2.apply(pd.to_numeric)
 df_2 = np.log(df_2) - np.log(df_2.shift(1))
 X = df_2.values[1:, :]
 
-window_size = 252*3
+window_size = 252*4
 slide_size = 30
 bootstrap_size = 252*2
-num_removal_runs = 100
+num_removal_runs = 1000
 no_samples = X.shape[0]
 p = X.shape[1]
 no_runs = math.floor((no_samples - window_size)/ (slide_size))
-print("We're running %s times" % no_runs)
 
 X_new = X[0:window_size, :]
 bs = CircularBlockBootstrap(bootstrap_size, X_new)
@@ -152,23 +160,13 @@ for data in bs.bootstrap(num_removal_runs):
     total_mst_prescence_tau += M 
 
 print("Pearson")
-print("%s \pm %s" % calculate_diff(pearson_msts))
+print("%.3f \pm %.3f" % calculate_diff(pearson_msts))
 
 print("Spearman")
-print("%s \pm %s" % calculate_diff(spearman_msts))
+print("%.3f \pm %.3f" % calculate_diff(spearman_msts))
 
 print("tau")
-print("%s \pm %s" % calculate_diff(tau_msts))
-
-plt.figure()
-plt.title("Pearson Correlation")
-plt.hist(total_mst_prescence_pearson)
-plt.savefig("mst_prescence_pearson.png")
-
-plt.figure()
-plt.title("Spearman Correlation")
-plt.hist(total_mst_prescence_spearman)
-plt.savefig("mst_prescence_spearman.png")
+print("%.3f \pm %.3f" % calculate_diff(tau_msts))
 
 pearson_corr = np.corrcoef(X_new.T)
 spearman_corr, p = spearmanr(X_new)   
@@ -213,7 +211,7 @@ plt.ylabel("p value")
 plt.xlim((-0.2, 1))
 plt.savefig("pvalue_correlation_tau.png")
 
-print("Correlation between tai correlation and p-value")
+print("Correlation between tau correlation and p-value")
 print(spearmanr(kendall_corr.flatten(), p_values_tau.flatten()))
 
 corr = np.corrcoef(X_new.T)
@@ -262,18 +260,8 @@ print(find_mean_p_values(p_values_spearman, company_sectors, M_spearman_mst))
 print("Tau")
 print(find_mean_p_values(p_values_tau, company_sectors, M_tau_mst))
 
-# Most probable edges are
-print("Most probable edges:")
-ind = np.argsort(p_values_pearson, axis=None)[::-1]
-cutoff_val = p_values_pearson.flatten()[ind[20]]
-p_values_pearson[cutoff_val > p_values_pearson] = 0
-p_values_pearson[p_values_pearson > 0] = 1
-nonzero_ind = np.nonzero(p_values_pearson)
-x_cords = nonzero_ind[0]
-y_cords = nonzero_ind[1]
-for x in zip(x_cords, y_cords):
-    print("%s - %s" % (company_names[x[0]], company_names[x[1]]))
-    print("%s - %s" % (company_sectors[x[0]], company_sectors[x[1]]))
-    print()
+# Check the persistent edge p-values
+edges = [["T", "VZ"], ["CCL", "RCL"], ["DHI", "LEN"], ["HD", "LOW"], ["CAT", "DE"], ["FDX", "UPS"], ["GS", "MS"], ["HAL", "SLB"]]
+find_edge_p_values(edges, p_values_pearson, p_values_spearman, p_values_tau)
 
 plt.show()
