@@ -5,8 +5,18 @@ import networkx as nx
 import os
 import matplotlib.pyplot as plt
 from arch.bootstrap import CircularBlockBootstrap
-from scipy.stats import spearmanr, kendalltau
+from scipy.stats import spearmanr, kendalltau, wilcoxon, mannwhitneyu
+import topcorr
 
+
+/home/tristan/Documents/phd/financial_network_clustering/mst_difference.png
+/home/tristan/Documents/phd/financial_network_clustering/total_prescence_corr.png
+/home/tristan/Documents/phd/financial_network_clustering/total_prescence_partial_correlation.png
+/home/tristan/Documents/phd/financial_network_clustering/total_presence_correlation.png
+/home/tristan/Documents/phd/financial_network_clustering/total_presence_partial_correlation.png
+/home/tristan/Documents/phd/financial_network_clustering/us_average_path_length.png
+/home/tristan/Documents/phd/financial_network_clustering/us_clustering_coefficient.png
+/home/tristan/Documents/phd/financial_network_clustering/us_correlation_mst.png
 def find_edge_p_values(edges, p_values_pearson, p_values_spearman, p_values_tau):
     for edge in edges:
         ind1 = company_names == edge[0]
@@ -16,15 +26,6 @@ def find_edge_p_values(edges, p_values_pearson, p_values_spearman, p_values_tau)
         print(p_values_spearman[ind1, ind2])
         print(p_values_tau[ind1, ind2])
 
-def correlation_to_distance_graph(G):
-    """
-    Converts a correlation graph to a distance based one
-    """
-    G = G.copy()
-    for edge in G.edges():
-        G.edges[edge]['weight'] =  np.sqrt(2 - 2*G.edges[edge]['weight'])
-    return G
-
 def calculate_diff(mst_lst):
     num_msts = len(mst_lst)
     diffs = []
@@ -32,29 +33,16 @@ def calculate_diff(mst_lst):
     for i in range(num_msts):
         for j in range(i+1, num_msts):
             diffs.append(np.count_nonzero(mst_lst[i] - mst_lst[j]) / (4*(p-1)))
-    return np.mean(diffs), np.std(diffs)
+    return diffs
 
-def compute_PMFG(sorted_edges, nb_nodes):
-    PMFG = nx.Graph()
-    for edge in sorted_edges:
-        PMFG.add_edge(edge['source'], edge['dest'])
-        if not planarity.is_planar(PMFG):
-            PMFG.remove_edge(edge['source'], edge['dest'])
-            
-        if len(PMFG.edges()) == 3*(nb_nodes-2):
-            break
-    
-    return PMFG
-
-def sort_graph_edges(G):
-    sorted_edges = []
-    for source, dest, data in sorted(G.edges(data=True),
-                                     key=lambda x: x[2]['weight']):
-        sorted_edges.append({'source': source,
-                             'dest': dest,
-                             'weight': data['weight']})
-        
-    return sorted_edges
+def calculate_full_matrix_diff(mat_lst):
+    num_mats = len(mat_lst)
+    diffs = []
+    p = mat_lst[0].shape[0]
+    for i in range(num_mats):
+        for j in range(i+1, num_mats):
+            diffs.append(np.abs(mat_lst[i]/mat_lst[i].sum() - mat_lst[j]/mat_lst[j].sum()).sum())
+    return diffs
 
 def find_mean_p_values(p_values, company_sectors, M):
     """
@@ -75,7 +63,7 @@ def find_mean_p_values(p_values, company_sectors, M):
             else:
                 inter_sector_score.append(p_values[i, j])
 
-    return np.mean(all_score), np.std(all_score), np.mean(intra_sector_score), np.std(intra_sector_score), np.mean(inter_sector_score), np.std(inter_sector_score)
+    return all_score, inter_sector_score, intra_sector_score
 
 def calculate_tau_matrix(X):
     n, p = X.shape
@@ -90,7 +78,19 @@ def calculate_tau_matrix(X):
     return M + M.T
 np.seterr(all='raise')
 
-df = pd.read_csv("S&P500.csv", index_col=0)
+country = "DE"
+if country == "DE":
+    df = pd.read_csv("DAX30.csv", index_col=0)        
+    window_size = 252 * 4
+    bootstrap_size = 252
+elif country == "UK":
+    df = pd.read_csv("FTSE100.csv", index_col=0)
+    window_size = 252 * 4
+    bootstrap_size = 252
+elif country == "US":
+    df = pd.read_csv("S&P500.csv", index_col=0)
+    window_size = 252 * 4
+    bootstrap_size = 252
 
 company_sectors = df.iloc[0, :].values
 company_names = df.T.index.values
@@ -100,15 +100,15 @@ df_2 = df_2.apply(pd.to_numeric)
 df_2 = np.log(df_2) - np.log(df_2.shift(1))
 X = df_2.values[1:, :]
 
-window_size = 252*4
-slide_size = 30
-bootstrap_size = 252*2
 num_removal_runs = 1000
 no_samples = X.shape[0]
 p = X.shape[1]
-no_runs = math.floor((no_samples - window_size)/ (slide_size))
 
-X_new = X[0:window_size, :]
+X_new = X[0:window_size, 0:70]
+company_names = company_names[0:70]
+company_sectors = company_sectors[0:70]
+
+p = X_new.shape[1]
 bs = CircularBlockBootstrap(bootstrap_size, X_new)
 total_mst_prescence_spearman = np.zeros((p, p))
 total_mst_prescence_pearson = np.zeros((p, p))
@@ -117,151 +117,71 @@ pearson_msts = []
 spearman_msts = []
 tau_msts = []
 
+pearson_full = []
+spearman_full = []
+tau_full = []
+i = 0
 for data in bs.bootstrap(num_removal_runs):
+    print("Run %s" % i)
     X_bs = data[0][0]
 
-    corr = np.corrcoef(X_bs.T)
+    pearson_corr = np.corrcoef(X_bs.T)
+    spearman_corr, _ = spearmanr(X_bs)   
+    tau_corr = calculate_tau_matrix(X_bs)
 
-    G_pearson = nx.from_numpy_matrix(corr)
-    G_pearson = nx.relabel_nodes(G_pearson, dict(zip(G_pearson.nodes(), company_names)))
+    pearson_full.append(pearson_corr)
+    spearman_full.append(spearman_corr)
+    tau_full.append(tau_corr)
+
+    mst_pearson = topcorr.mst(pearson_corr)
+    mst_spearman = topcorr.mst(spearman_corr)
+    mst_tau = topcorr.mst(tau_corr)
+
+    # Build a relabelling dictionary
+    node_labels = dict()
+    for node in mst_pearson.nodes():
+        node_labels[node] = company_names[node]
+
     node_attributes = dict(zip(company_names[list(range(len(company_sectors)))], company_sectors))
-    nx.set_node_attributes(G_pearson, node_attributes, 'sector')
 
-    corr, p = spearmanr(X_bs)   
-    G_spearman = nx.from_numpy_matrix(corr)
-    G_spearman = nx.relabel_nodes(G_spearman, dict(zip(G_spearman.nodes(), company_names)))
-    node_attributes = dict(zip(company_names[list(range(len(company_sectors)))], company_sectors))
-    nx.set_node_attributes(G_spearman, node_attributes, 'sector')
+    mst_pearson=nx.relabel_nodes(mst_pearson, node_labels)
+    nx.set_node_attributes(mst_pearson, node_attributes, 'sector')
 
-    corr = calculate_tau_matrix(X_bs)   
-    G_tau = nx.from_numpy_matrix(corr)
-    G_tau = nx.relabel_nodes(G_tau, dict(zip(G_tau.nodes(), company_names)))
-    node_attributes = dict(zip(company_names[list(range(len(company_sectors)))], company_sectors))
-    nx.set_node_attributes(G_tau, node_attributes, 'sector')
+    mst_spearman=nx.relabel_nodes(mst_spearman, node_labels)
+    nx.set_node_attributes(mst_spearman, node_attributes, 'sector')
+    
+    mst_tau = nx.relabel_nodes(mst_tau, node_labels)
+    nx.set_node_attributes(mst_tau, node_attributes, 'sector')
 
-    G_pearson_dist = correlation_to_distance_graph(G_pearson)
-    G_spearman_dist = correlation_to_distance_graph(G_spearman)
-    G_tau_dist = correlation_to_distance_graph(G_tau)
-
-    G_pearson_mst = nx.minimum_spanning_tree(G_pearson_dist)
-    G_spearman_mst = nx.minimum_spanning_tree(G_spearman_dist)
-    G_tau_mst = nx.minimum_spanning_tree(G_tau_dist)
-
-    M = nx.to_numpy_array(G_pearson_mst, weight='None')
+    M = nx.to_numpy_array(mst_pearson, nodelist=company_names)
     pearson_msts.append(M)
     total_mst_prescence_pearson += M 
 
-    M = nx.to_numpy_array(G_spearman_mst, weight='None')
+    M = nx.to_numpy_array(mst_spearman, nodelist = company_names)
     spearman_msts.append(M)
     total_mst_prescence_spearman += M 
     
-    M = nx.to_numpy_array(G_tau_mst, weight='None')
+    M = nx.to_numpy_array(mst_tau, nodelist = company_names)
     tau_msts.append(M)
     total_mst_prescence_tau += M 
+    i+=1
 
-print("Pearson")
-print("%.3f \pm %.3f" % calculate_diff(pearson_msts))
+pearson_weighted_diffs = calculate_full_matrix_diff(pearson_msts)
+spearman_weighted_diffs = calculate_full_matrix_diff(spearman_msts)
+tau_weighted_diffs = calculate_full_matrix_diff(tau_msts)
 
-print("Spearman")
-print("%.3f \pm %.3f" % calculate_diff(spearman_msts))
+pearson_unweighted_diffs = calculate_diff(pearson_msts)
+spearman_unweighted_diffs = calculate_diff(spearman_msts)
+tau_unweighted_diffs = calculate_diff(tau_msts)
 
-print("tau")
-print("%.3f \pm %.3f" % calculate_diff(tau_msts))
+# Full correlation matrices stdev
+pearson_full_diff = calculate_full_matrix_diff(pearson_full)
+spearman_full_diff = calculate_full_matrix_diff(spearman_full)
+tau_full_diff = calculate_full_matrix_diff(tau_full)
 
-pearson_corr = np.corrcoef(X_new.T)
-spearman_corr, p = spearmanr(X_new)   
-kendall_corr = calculate_tau_matrix(X_new)
+print("Pearson & %.3f & %.3f & %.3f & %.3f & %.3f & %.3f \\\\" % (np.mean(pearson_weighted_diffs), np.std(pearson_weighted_diffs), np.mean(pearson_unweighted_diffs), np.std(pearson_unweighted_diffs), np.mean(pearson_full_diff), np.std(pearson_full_diff)))
+print("Spearman & %.3f & %.3f & %.3f & %.3f & %.3f & %.3f \\\\" % (np.mean(spearman_weighted_diffs), np.std(spearman_weighted_diffs), np.mean(spearman_unweighted_diffs), np.std(spearman_unweighted_diffs), np.mean(spearman_full_diff), np.std(spearman_full_diff)))
+print("$\\tau$ & %.3f & %.3f & %.3f & %.3f & %.3f & %.3f  \\\\" % (np.mean(tau_weighted_diffs), np.std(tau_weighted_diffs), np.mean(tau_unweighted_diffs), np.std(tau_unweighted_diffs), np.mean(tau_full_diff), np.std(tau_full_diff)))
 
-np.fill_diagonal(pearson_corr, 0)
-np.fill_diagonal(spearman_corr, 0)
-
-p_values_pearson = total_mst_prescence_pearson / num_removal_runs
-p_values_spearman = total_mst_prescence_spearman / num_removal_runs
-p_values_tau = total_mst_prescence_tau / num_removal_runs
-
-np.fill_diagonal(p_values_pearson, 0)
-np.fill_diagonal(p_values_spearman, 0)
-
-plt.figure()
-plt.scatter(pearson_corr.flatten(), p_values_pearson.flatten())
-#plt.title("Correlation strength against p-value")
-plt.xlabel("Pearson Correlation Strength")
-plt.ylabel("p value")
-plt.xlim((-0.2, 1))
-plt.savefig("pvalue_correlation_pearson.png")
-print("Correlation between correlation and p-value")
-print(spearmanr(pearson_corr.flatten(), p_values_pearson.flatten()))
-
-plt.figure()
-plt.scatter(spearman_corr.flatten(), p_values_spearman.flatten())
-#plt.title("Partial Correlation strength against p-value")
-plt.xlabel("Spearman Correlation Strength")
-plt.ylabel("p value")
-plt.xlim((-0.2, 1))
-plt.savefig("pvalue_correlation_spearman.png")
-
-print("Correlation between spearman correlation and p-value")
-print(spearmanr(spearman_corr.flatten(), p_values_spearman.flatten()))
-
-plt.figure()
-plt.scatter(kendall_corr.flatten(), p_values_tau.flatten())
-#plt.title("Partial Correlation strength against p-value")
-plt.xlabel("Spearman Correlation Strength")
-plt.ylabel("p value")
-plt.xlim((-0.2, 1))
-plt.savefig("pvalue_correlation_tau.png")
-
-print("Correlation between tau correlation and p-value")
-print(spearmanr(kendall_corr.flatten(), p_values_tau.flatten()))
-
-corr = np.corrcoef(X_new.T)
-
-G_pearson = nx.from_numpy_matrix(corr)
-G_pearson = nx.relabel_nodes(G_pearson, dict(zip(G_pearson.nodes(), company_names)))
-node_attributes = dict(zip(company_names[list(range(len(company_sectors)))], company_sectors))
-nx.set_node_attributes(G_pearson, node_attributes, 'sector')
-
-corr, _ = spearmanr(X_new)   
-G_spearman = nx.from_numpy_matrix(corr)
-G_spearman = nx.relabel_nodes(G_spearman, dict(zip(G_spearman.nodes(), company_names)))
-node_attributes = dict(zip(company_names[list(range(len(company_sectors)))], company_sectors))
-nx.set_node_attributes(G_spearman, node_attributes, 'sector')
-
-corr = calculate_tau_matrix(X_new)   
-G_tau = nx.from_numpy_matrix(corr)
-G_tau = nx.relabel_nodes(G_tau, dict(zip(G_tau.nodes(), company_names)))
-node_attributes = dict(zip(company_names[list(range(len(company_sectors)))], company_sectors))
-nx.set_node_attributes(G_tau, node_attributes, 'sector')
-
-G_pearson_dist = correlation_to_distance_graph(G_pearson)
-G_spearman_dist = correlation_to_distance_graph(G_spearman)
-G_tau_dist = correlation_to_distance_graph(G_tau)
-
-G_pearson_mst = nx.minimum_spanning_tree(G_pearson_dist)
-G_spearman_dist = nx.minimum_spanning_tree(G_spearman_dist)
-G_tau_dist = nx.minimum_spanning_tree(G_tau_dist)
-
-M_pearson_mst = nx.to_numpy_array(G_pearson_mst)
-M_pearson_mst[np.abs(M_pearson_mst) > 0] = 1
-
-M_spearman_mst = nx.to_numpy_array(G_spearman_dist)
-M_spearman_mst[np.abs(M_spearman_mst) > 0] = 1
-
-M_tau_mst = nx.to_numpy_array(G_tau_dist)
-M_tau_mst[np.abs(M_tau_mst) > 0] = 1
-
-print("P-value scoring")
-print("Pearson")
-print(find_mean_p_values(p_values_pearson, company_sectors, M_pearson_mst))
-
-print("Spearman")
-print(find_mean_p_values(p_values_spearman, company_sectors, M_spearman_mst))
-
-print("Tau")
-print(find_mean_p_values(p_values_tau, company_sectors, M_tau_mst))
-
-# Check the persistent edge p-values
-edges = [["T", "VZ"], ["CCL", "RCL"], ["DHI", "LEN"], ["HD", "LOW"], ["CAT", "DE"], ["FDX", "UPS"], ["GS", "MS"], ["HAL", "SLB"]]
-find_edge_p_values(edges, p_values_pearson, p_values_spearman, p_values_tau)
 
 plt.show()
